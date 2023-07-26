@@ -1,0 +1,4 @@
+#  Copyright (c) 2023.  OCX Consortium https://3docx.org. See the LICENSE
+# Module specific config settings
+WIKI_URL : "https://ocxwiki.astrup.info"
+DEFAULT_NSP : "ocx"
