@@ -3,11 +3,7 @@
 # from the environment for the first two.
 SOURCEDIR = ./ocxwiki
 CONDA_ENV = ocxwiki
-# PS replacements for sh
-RM = 'del -Confirmed False'
-
 PACKAGE := ocxwiki
-MODULES := $(wildcard $(PACKAGE)/*.py)
 
 conda-create:  ## Create a new conda environment with the python version and basic development tools
 	@conda env create -f environment.yml
@@ -59,10 +55,10 @@ doc: ## Build the html docs using Sphinx. For other Sphinx options, run make in 
 
 # RUN ##################################################################
 
-PHONY: run
-run: ## Start ocx-tools CLI
-	python $(SOURCEDIR)/__main__.py
 
+run: ## Start ocxwiki CLI
+	@python cli.py
+PHONY: run
 # TESTS #######################################################################
 
 FAILURES := .pytest_cache/pytest/v/cache/lastfailed

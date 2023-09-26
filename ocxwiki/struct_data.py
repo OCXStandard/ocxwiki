@@ -47,14 +47,17 @@ def struct_get(content, keep_order=False) -> Dict:
 
 
 @staticmethod
-def struct_gen(name, data):
+def struct_gen(name: str, data: Dict) -> str:
     """Generate dataentry *name* from *data*."""
-    return '---- dataentry %s ----\n%s\n----' % (name, '\n'.join(
-        '%s:%s' % (attr, value) for attr, value in data.items()))
+    struct =  f'---- dataentry {name} ----\n'
+    for attr, value in data.items():
+        struct += f'\n{attr} : {value}'
+    struct +='\n----\n'
+    return struct
 
 
 @staticmethod
-def struct_ignore(content):
+def struct_ignore(content: str) -> str:
     """Remove dataentry from *content*."""
     page_content = []
     start = False
@@ -71,11 +74,20 @@ def struct_ignore(content):
 class WikiSchema(BaseDataClass):
     """Data class defining the structured data schema
 
-    Arguments:
+        Parameters:
+            ocx_version: OCX Schema version
+            ocx_location: The uri of the schema location
+            namespace: The schema type namespace
+            author: Publishing author
+            date: Publish date
+            status: The schema status (draft or published)
+            wiki_version: The wiki CLI version
 
     """
-    version: str = field(metadata={"header": "Schema Version"})
-    namespace: str = field(metadata={"header": "Namespace URI"})
-    author: str = field(metadata={"header": "Author"})
-    date: str = field(metadata={"header": "Date"})
-    status: str = field(default="", metadata={"header": "Status"})
+    ocx_version: str = field(metadata={"header": "OCX Version "})
+    ocx_location: str = field(metadata={"header": "Location URL_url "})
+    namespace: str = field(metadata={"header": "Namespace"})
+    author: str = field(metadata={"header": "Author "})
+    date: str = field(metadata={"header": "Date "})
+    status: str = field(metadata={"header": "Statuss "}) # For some strange reason the last character disappear when rendered.
+    wiki_version:str = field(metadata={"header": "Publisher version "})

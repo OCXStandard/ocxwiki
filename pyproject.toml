@@ -16,11 +16,14 @@ readme = "README.md"
 packages = [{include = "ocxwiki"}]
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
 xsdata = "23.6"
+click_shell = "*"
+typer = "*"
 ocx = "3.0.0a0"
-ocx_schema_parser = "0.3.0"
+ocx-schema-parser = "^0.8.0"
 spellchecker ="*"
+arrow = "*"
 dokuwiki = "*"
 loguru = "*"
 pyyaml = "*"
@@ -30,7 +33,12 @@ sphinx-autodoc-typehints = "*"
 sphinx_rtd_theme = "*"
 sphinx-click = "*"
 tbump = "*"
-dotenv = "*"
+python-dotenv = "*"
+pregex = "*"
+rich = "^13.5.2"
+
+[tool.poetry.scripts]
+script = 'cli:cli'
 
 [tool.tbump]
 # Uncomment this if your project is hosted on GitHub:

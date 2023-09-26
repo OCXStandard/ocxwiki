@@ -4,13 +4,13 @@
 # System imports
 from typing import Dict, OrderedDict, Optional
 import datetime
-import re
+import requests.exceptions as http_error
 from pathlib import Path
 # Third party imports
 from dokuwiki import DokuWiki, DokuWikiError
 from loguru import logger
 # Module imports
-from ocxwiki import USER, PSWD, WIKI_URL, DEFAULT_NSP, DATA_SCHEMA
+from ocxwiki import USER, PSWD, WIKI_URL, DEFAULT_NSP
 import ocxwiki.struct_data as struct_data
 
 
@@ -30,8 +30,30 @@ class WikiClient:
 
     def __init__(self, url: str = WIKI_URL, user:str = USER, password = PSWD):
         self._url = url
-        self._wiki = DokuWiki(url, user, password)
+        self._wiki = None
+        self._connected = False
+        try:
+            self._wiki = DokuWiki(url, user, password)
+        except DokuWikiError as e:
+            logger.error(f'Connecting to {url} failed: {e}')
+        except Exception as e:
+            logger.error(f'Connecting to {url} failed: {e}')
+        if self._wiki is None:
+            raise DokuWikiError(f'Failed to connect to {url}')
+        else:
+            self._connected = True
+            logger.info(f'Connected to {self._url}')
+            logger.info(f'Dokuwiki version: {self._wiki.version}')
+            logger.info(f'XMLRPC version: {self._wiki.xmlrpc_version}')
 
+
+    def is_connected(self) -> bool:
+        """True if a connection to the ocxwiki is established, False otherwise."""
+        return self._connected
+
+    def current_url(self) -> str:
+        """Return the current ocxwiki url."""
+        return self._url
 
     def login(self, user: str = USER, password: str = PSWD) -> bool:
         """Log in to the wiki.
@@ -43,10 +65,20 @@ class WikiClient:
 
         try:
             self._wiki.login(user, password)
+            self._connected = True
             return True
         except (DokuWikiError, Exception) as err:
-            print(f'unable to connect: {err}')
-            return False
+            logger.error(f'Unable to connect: {err}')
+            self._connected = False
+        return self._connected
+
+    def wiki_version(self) -> str:
+        """Return the ocxwiki dokuwiki version."""
+        return self._wiki.version
+
+    def xmlrpc_version(self) -> str:
+        """Return the ocxwiki xmlrpc version."""
+        return self._wiki.xmlrpc_version
 
     # Wiki pages
     def list_pages(self, namespace: str = DEFAULT_NSP, depth: int = 0, md5_hash: bool = False, skip_acl: bool = False):
@@ -110,10 +142,11 @@ class WikiClient:
         Returns:
             Returns True if the page was successfully set, False otherwise.
             """
+        options = {'sum': summary, 'minor': minor}
         wiki_page = f'{namespace}:{page}'
         result = False
         try:
-            result =  self._wiki.pages.set(wiki_page, content, sum, minor)
+            result =  self._wiki.pages.set(wiki_page, content, **options)
         except DokuWikiError as e:
             logger.error(e)
         return result
