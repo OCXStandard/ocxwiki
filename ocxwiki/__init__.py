@@ -6,7 +6,7 @@ from pathlib import Path
 from ocx_schema_parser.utils import utilities
 
 __app_name__ = "ocxwiki"
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 
 # Secrets
