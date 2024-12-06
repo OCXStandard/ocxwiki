@@ -89,5 +89,5 @@ class WikiSchema(BaseDataClass):
     namespace: str = field(metadata={"header": "Namespace"})
     author: str = field(metadata={"header": "Author "})
     date: str = field(metadata={"header": "Date "})
-    status: str = field(metadata={"header": "Statuss "}) # For some strange reason the last character disappear when rendered.
+    status: str = field(metadata={"header": "Statuss "}) # For some strange reason the last character disappear when rendered on the wiki
     wiki_version:str = field(metadata={"header": "Publisher version "})

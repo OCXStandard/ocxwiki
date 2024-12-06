@@ -76,7 +76,6 @@ def schema_summary():
 @wiki.command()
 def version():
     """Print the ocxwiki CLI version."""
-
     print(f'The {__app_name__} version: {__version__}')
 
 @wiki.command()

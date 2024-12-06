@@ -51,6 +51,8 @@ doc: ## Build the html docs using Sphinx. For other Sphinx options, run make in 
 	@$(SPHINXBUILD)  -M clean "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 	@$(SPHINXBUILD)  "$(SOURCEDIR)" "$(BUILDDIR)/$(SPHINXOPTS)" -b "$(SPHINXOPTS)"
 
+poetry-fix:  ## Force pip poetry re-installation
+	@pip install poetry --upgrade
 
 
 # RUN ##################################################################

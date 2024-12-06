@@ -28,7 +28,7 @@ class WikiClient:
 
     """
 
-    def __init__(self, url: str = WIKI_URL, user:str = USER, password = PSWD):
+    def __init__(self, url: str = WIKI_URL, user: str = USER, password=PSWD):
         self._url = url
         self._wiki = None
         self._connected = False
@@ -45,7 +45,6 @@ class WikiClient:
             logger.info(f'Connected to {self._url}')
             logger.info(f'Dokuwiki version: {self._wiki.version}')
             logger.info(f'XMLRPC version: {self._wiki.xmlrpc_version}')
-
 
     def is_connected(self) -> bool:
         """True if a connection to the ocxwiki is established, False otherwise."""
@@ -122,7 +121,7 @@ class WikiClient:
         wiki_page = f'{namespace}:{page}'
         result = False
         try:
-            result= self._wiki.pages.append(wiki_page, content, summary, minor)
+            result = self._wiki.pages.append(wiki_page, content, summary, minor)
         except DokuWikiError as e:
             logger.error(e)
         return result
@@ -146,13 +145,13 @@ class WikiClient:
         wiki_page = f'{namespace}:{page}'
         result = False
         try:
-            result =  self._wiki.pages.set(wiki_page, content, **options)
+            result = self._wiki.pages.set(wiki_page, content, **options)
         except DokuWikiError as e:
             logger.error(e)
         return result
 
     # Data structs
-    def get_data(self, page: str,  keep_order: bool = True) -> Dict:
+    def get_data(self, page: str, keep_order: bool = True) -> Dict:
         """Get the structured data of the latest version of a given page.
 
         Arguments:
@@ -169,8 +168,8 @@ class WikiClient:
         return data
 
     # Wiki media
-    def list_media(self, namespace:str, depth: int = 0, md5_hash: bool = False, skip_acl: bool = False,
-                   pattern: str = '*') ->Dict:
+    def list_media(self, namespace: str, depth: int = 0, md5_hash: bool = False, skip_acl: bool = False,
+                   pattern: str = '*') -> Dict:
         """List the wiki media.
 
         Arguments:
@@ -187,7 +186,6 @@ class WikiClient:
         except DokuWikiError as e:
             logger.error(e)
         return result
-
 
     def media_changes(self, timestamp: datetime):
         """Returns the list of medias changed since given ''timestamp''.
@@ -231,5 +229,3 @@ class WikiClient:
 
            """
         return self._wiki.medias.delete(media)
-
-

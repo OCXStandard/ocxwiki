@@ -59,7 +59,7 @@ def cli(ctx):
 
     secho(LOGO, fg='blue')
     secho(f"Version: {__version__}", fg='green')
-    secho("Copyright (c) 2023. OCX Consortium https://3docx.org\n", fg='green')
+    secho("Copyright (c) 2024. OCX Consortium https://3docx.org\n", fg='green')
     logger.info(f'{__app_name__} session started.')
     ctx.call_on_close(exit_cli)
 @cli.command(short_help="Clear the screen")

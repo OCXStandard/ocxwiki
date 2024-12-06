@@ -57,7 +57,7 @@ class WikiManager:
         self._wiki_user = user
         self._schema_url = schema_url
         self._state:PublishState  = PublishState.DRAFT
-        self._publish_ns = {PublishState.PUBLIC: 'public', PublishState.DRAFT: 'ocx-if:draft'}
+        self._publish_ns = {PublishState.PUBLIC: 'public:schema:', PublishState.DRAFT: 'ocx-if:draft-schema'}
         self._wiki_schema: Union[WikiSchema, None] = None
         self._ocx_elements: List[Tuple] = []
         self._xs_types:Dict = {}
@@ -284,6 +284,7 @@ class WikiManager:
             mode: the draft mode (True or False)
             """
         self._state = state
+        self._wiki_schema.status = state
 
 
     def get_publish_state(self) -> PublishState:
@@ -297,10 +298,14 @@ class WikiManager:
     def get_publish_namespace(self) -> str:
         """Return the publishing name space.
         Returns:
-            namespace: Either ``draft`` ior``public`` depending on teh ``PublishState``.
+            namespace: Either ``draft`` or``public`` depending on teh ``PublishState``.
 
         """
-        return self._publish_ns[self._state]
+        if self._state == PublishState.PUBLIC and self.transformer:
+            version = self.transformer.parser.get_schema_version()       # Add ocx version to public namespace
+            return f'{self._publish_ns[self._state]}{version}'
+        else:
+            return self._publish_ns[self._state]
 
     def get_wiki_data_struct(self) -> WikiSchema:
         """Return the current ``WikiSchema`` data."""

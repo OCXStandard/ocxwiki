@@ -1,8 +1,8 @@
 #  Copyright (c) 2023.  OCX Consortium https://3docx.org. See the LICENSE
 # Module specific config settings
 WIKI_URL : "https://ocxwiki.3docx.org/"
-TEST_WIKI_URL: "https://ocxwiki.astrup.info/"
+TEST_WIKI_URL: "http://localhost:9001/"
 DEFAULT_NSP : "ocx"
 
-WORKING_DRAFT: 'https://3docx.org/fileadmin//ocx_schema//V300b0//OCX_Schema.xsd'
+WORKING_DRAFT: 'https://3docx.org/fileadmin//ocx_schema//V300//OCX_Schema.xsd'
 SCHEMA_FOLDER: 'tmp'

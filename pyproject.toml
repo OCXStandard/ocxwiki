@@ -17,11 +17,11 @@ packages = [{include = "ocxwiki"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-xsdata = "23.6"
+xsdata = "23.8"
 click_shell = "*"
 typer = "*"
-ocx = "3.0.0a0"
-ocx-schema-parser = "^0.8.0"
+ocx = "3.0.1"
+ocx-schema-parser = ">=1.8.0"
 spellchecker ="*"
 arrow = "*"
 dokuwiki = "*"
