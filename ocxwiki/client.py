@@ -28,12 +28,15 @@ class WikiClient:
 
     """
 
-    def __init__(self, url: str = WIKI_URL, user: str = USER, password=PSWD):
-        self._url = url
+    def __init__(self):
+        self._url = ""
         self._wiki = None
         self._connected = False
+
+    def connect(self, url: str = WIKI_URL, user: str = USER, password=PSWD)-> bool:
         try:
             self._wiki = DokuWiki(url, user, password)
+
         except DokuWikiError as e:
             logger.error(f'Connecting to {url} failed: {e}')
         except Exception as e:
@@ -45,6 +48,7 @@ class WikiClient:
             logger.info(f'Connected to {self._url}')
             logger.info(f'Dokuwiki version: {self._wiki.version}')
             logger.info(f'XMLRPC version: {self._wiki.xmlrpc_version}')
+        return self._connected
 
     def is_connected(self) -> bool:
         """True if a connection to the ocxwiki is established, False otherwise."""

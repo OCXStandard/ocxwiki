@@ -16,6 +16,8 @@ from ocx_schema_parser.data_classes import BaseDataClass
 from ocxwiki.error import OcxWikiError
 
 
+
+
 @staticmethod
 def struct_get(content, keep_order=False) -> Dict:
     """Get dataentry from *content*. *keep_order* indicates whether to

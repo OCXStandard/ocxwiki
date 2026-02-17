@@ -52,7 +52,7 @@ class WikiManager:
             self._wiki_user: Wiki login username
 
         """
-        self.client: WikiClient = WikiClient(wiki_url, user, pswd)
+        self.client: WikiClient = WikiClient()
         self.transformer: Union[Transformer, None] = None
         self._wiki_user = user
         self._schema_url = schema_url

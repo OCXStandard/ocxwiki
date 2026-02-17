@@ -1,7 +1,7 @@
 #  Copyright (c) 2023. #  OCX Consortium https://3docx.org. See the LICENSE
 """Top level module for the ocxwiki package"""
 import os
-from dotenv import load_dotenv
+from dotenv  import load_dotenv
 from pathlib import Path
 from ocx_schema_parser.utils import utilities
 

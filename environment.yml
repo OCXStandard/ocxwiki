@@ -1,5 +1,5 @@
-# Minimal conda environment with python, pip and poetry and windows Make file support.
-# Dependencies are managed by Poetry
+# Minimal conda environment with python, pip and uv and windows Make file support.
+# Dependencies are managed via pyproject.toml using uv
 # Install it: conda env create -f environment.yml
 name: ocxwiki
 channels:
@@ -12,7 +12,8 @@ channels:
 dependencies:
   - python=3.11
   - pip
-  - poetry
   - m2w64-make # GNU mMake for windows
   - m2-grep # Grep for windows. For Makefile sh
   - m2-gawk # awk for windows. for Makefile sh
+  # uv is typically installed via pipx on the host; install into the env if desired:
+  # - uv
