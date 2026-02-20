@@ -7,14 +7,12 @@ from enum import Enum
 from typing import Dict, OrderedDict, List, Tuple, Union, Optional
 import re
 from dataclasses import dataclass, field
+import asyncio
 
 # Third party imports
 from loguru import logger
 import datetime
 from lxml.etree import QName
-
-import pregex.meta as me
-from pregex.core import *
 
 # Module imports
 import ocx_schema_parser
@@ -34,12 +32,10 @@ class PublishState(Enum):
 
 class WikiManager:
 
-    def __init__(self, wiki_url: str, user:str, pswd:str, schema_url:str):
+    def __init__(self, wiki_url,  schema_url:str = None):
         """Manage updates of ocxwiki pages.
         Arguments:
             wiki_url: ocxwiki url
-            user: The wiki user
-            pswd: The user password
             schema_url: The url of the OCX schema
 
         Parameters:
@@ -52,24 +48,30 @@ class WikiManager:
             self._wiki_user: Wiki login username
 
         """
-        self.client: WikiClient = WikiClient()
-        self.transformer: Union[Transformer, None] = None
-        self._wiki_user = user
+        self._client: WikiClient = WikiClient(url=wiki_url)
+        self._transformer: Union[Transformer, None] = None
         self._schema_url = schema_url
         self._state:PublishState  = PublishState.DRAFT
         self._publish_ns = {PublishState.PUBLIC: 'public:schema:', PublishState.DRAFT: 'ocx-if:draft-schema'}
         self._wiki_schema: Union[WikiSchema, None] = None
         self._ocx_elements: List[Tuple] = []
         self._xs_types:Dict = {}
+        self._wiki_user: str = "Unknown"  # Default user, will be set when connecting to wiki
+
+    @property
+    def transformer(self) -> Union[Transformer, None]:
+        """Return the schema transformer."""
+        return self._transformer
+
+    @property
+    def client(self) -> WikiClient:
+        """Return the wiki client."""
+        return self._client
 
     def schema_url(self) -> str:
         """Returns the url to the current OCX schema."""
         return self._schema_url
 
-    def get_schema_locations(self) -> Dict:
-        """Return the schema locations, also referenced schemas."""
-
-        return self.transformer.get
 
     def process_schema(self, url: str, download_folder: Path) -> bool:
         """Process the schema given by the url.
@@ -78,12 +80,17 @@ class WikiManager:
 
         """
         # Create a fresh schema transformer
-        if self.transformer is not None:
-            del self.transformer
-        self.transformer = Transformer()
+        if self._transformer is not None:
+            del self._transformer
+        self._transformer = Transformer()
+        logger.debug(f'Processing schema from url: {url} with download folder: {download_folder}')
         result =  self.transformer.transform_schema_from_url(url,download_folder)
         if result:
-             self.transform()
+            self.transform()
+            if self.transformer:
+                logger.debug(f'Transformed schema version: {self.transformer.parser.get_schema_version()}')
+            else:
+                logger.debug('No transformer available after processing schema.')
         return result
 
     def process_schema_folder(self, folder: Path)->bool:
@@ -94,11 +101,14 @@ class WikiManager:
         """
         # Create a fresh schema transformer
         if self.transformer is not None:
-            del self.transformer
-        self.transformer = Transformer()
+            del self._transformer
+        self._transformer = Transformer()
+        logger.debug(f'Processing schema from url: {folder}')
         result =  self.transformer.transform_schema_from_folder(folder)
         if result:
              self.transform()
+             if self.transformer:
+                logger.debug(f'Transformed schema version: {self.transformer.parser.get_schema_version()}')
         return result
 
 
@@ -171,12 +181,15 @@ class WikiManager:
                 type = child.type
                 child.name = Render.link_internal(prefix, name, publish_ns)
                 # Link to any builtins
-                if type in builtins:
+                if type and type in builtins:
                     child.type = Render.link_external(type, builtins)
-                else:
-                    pattern = cl.AnyWhitespace() + qu.Exactly(type, 1) + cl.AnyWhitespace()
-                    if len(pattern.get_matches(type)) > 0:
-                        child.type = pattern.replace(type, f' [[{publish_ns}:{prefix}:{name}]] ')
+                elif type:
+                    # Create internal wiki link for non-builtin types
+                    # Check if type corresponds to a known element
+                    type_parts = type.split(':') if ':' in type else [prefix, type]
+                    if len(type_parts) == 2:
+                        type_prefix, type_name = type_parts
+                        child.type = f'[[{publish_ns}:{type_prefix}:{type_name}]]'
             # Apply links to attributes
             for attribute in ocx.get_attributes():
                 name = attribute.name
@@ -187,12 +200,15 @@ class WikiManager:
                 for item in search:
                     attribute.name = Render.link_internal(prefix, name, publish_ns)
                 # External links
-                if attribute.type in builtins:
+                if attribute.type and attribute.type in builtins:
                     attribute.type = Render.link_external(type, builtins)
-                else:
-                    pattern = cl.AnyWhitespace() + qu.Exactly(type, 1) + cl.AnyWhitespace()
-                    if len(pattern.get_matches(type)) >0:
-                        attribute.type = pattern.replace(type, f' [[{publish_ns}:{prefix}:{name}]] ')
+                elif type:
+                    # Create internal wiki link for non-builtin types
+                    # Check if type corresponds to a known element
+                    type_parts = type.split(':') if ':' in type else [prefix, type]
+                    if len(type_parts) == 2:
+                        type_prefix, type_name = type_parts
+                        attribute.type = f'[[{publish_ns}:{type_prefix}:{type_name}]]'
 
         return
 
@@ -219,6 +235,26 @@ class WikiManager:
         result = self.client.set_page(page_name, content, summary, wiki_namespace, False)
         return result
 
+    async def publish_page_async(self, ocx: OcxGlobalElement) -> bool:
+        """Async version of publish_page. Publish a dokuwiki page with ``name`` to the ocxwiki.
+
+        Arguments:
+            ocx: The documentation of the OCX element to add to the dokuwiki
+
+        Returns:
+            True if successfully, false otherwise.
+        """
+        if self.transformer is None:
+            raise OcxWikiError('No schema url has been processed.')
+        wiki_namespace = self.get_publish_namespace()
+        page_name = f'{ocx.get_prefix()}:{ocx.get_name()}'
+        ocx_namespace = QName(ocx.get_tag()).namespace
+        self._wiki_schema.namespace = ocx_namespace
+        content = Render.page(ocx, self._wiki_schema, self._ocx_elements, self._xs_types)
+        summary = f'Publish schema version {self._wiki_schema.ocx_version}'
+        result = await self.client.set_page_async(page_name, content, summary, wiki_namespace, False)
+        return result
+
 
     def publish_enum(self, enum: OcxEnumerator) -> bool:
         """Publish a schema enum page with ``name`` to the ocxwiki. This will create a new version of the page in the
@@ -237,6 +273,23 @@ class WikiManager:
         content = Render.enum(enum, self._wiki_schema)
         summary = 'Bumped schema version'
         return self.client.set_page(page_name, content, summary, namespace, False)
+
+    async def publish_enum_async(self, enum: OcxEnumerator) -> bool:
+        """Async version of publish_enum. Publish a schema enum page to the ocxwiki.
+
+        Arguments:
+            enum: The schema enumerator
+
+        Returns:
+            True if successfully, false otherwise.
+        """
+        if self.transformer is None:
+            raise OcxWikiError('No schema url has been processed.')
+        namespace = self.get_publish_namespace()
+        page_name = f'{enum.prefix}:{enum.name}'
+        content = Render.enum(enum, self._wiki_schema)
+        summary = 'Bumped schema version'
+        return await self.client.set_page_async(page_name, content, summary, namespace, False)
 
     def publish_simple_type(self, attribute: SchemaAttribute) -> bool:
         """Publish a schema simpleType page with ``name`` to the ocxwiki. This will create a new version of the page in the
@@ -258,6 +311,23 @@ class WikiManager:
         summary = 'Bumped schema version'
         return self.client.set_page(page_name, content, summary, namespace, False)
 
+    async def publish_simple_type_async(self, attribute: SchemaAttribute) -> bool:
+        """Async version of publish_simple_type. Publish a schema simpleType page to the ocxwiki.
+
+        Arguments:
+            attribute: The attribute to publish
+
+        Returns:
+            True if successfully, false otherwise.
+        """
+        if self.transformer is None:
+            raise OcxWikiError('No schema url has been processed.')
+        namespace = self.get_publish_namespace()
+        page_name = f'{attribute.prefix}:{attribute.name}'
+        content = Render.attribute(attribute, self._wiki_schema)
+        summary = 'Bumped schema version'
+        return await self.client.set_page_async(page_name, content, summary, namespace, False)
+
     def publish_attribute(self, attribute: SchemaAttribute) -> bool:
         """Publish a schema global attribute page with ``name`` to the ocxwiki. This will create a new version of the page in the
             ``publish`` namespace.
@@ -277,14 +347,33 @@ class WikiManager:
         result = self.client.set_page(page_name, content, summary, namespace, False)
         return result
 
-    def set_publish_state(self, state: PublishState = PublishState.DRAFT):
-        """Set draft mode to True or False.
+    async def publish_attribute_async(self, attribute: SchemaAttribute) -> bool:
+        """Async version of publish_attribute. Publish a schema global attribute page to the ocxwiki.
 
         Arguments:
-            mode: the draft mode (True or False)
+            attribute: The attribute to publish
+
+        Returns:
+            True if successfully, false otherwise.
+        """
+        if self.transformer is None:
+            raise OcxWikiError('No schema url has been processed.')
+        namespace = self.get_publish_namespace()
+        page_name = f'{attribute.prefix}:{attribute.name}'
+        content = Render.attribute(attribute, self._wiki_schema)
+        summary = 'Bumped schema version'
+        result = await self.client.set_page_async(page_name, content, summary, namespace, False)
+        return result
+
+    def set_publish_state(self, state: PublishState = PublishState.DRAFT):
+        """Set the publish state to DRAFT or PUBLIC.
+
+        Arguments:
+            state: the publish state (PublishState.DRAFT or PublishState.PUBLIC)
             """
         self._state = state
-        self._wiki_schema.status = state
+        if self._wiki_schema is not None:
+            self._wiki_schema.status = str(state)
 
 
     def get_publish_state(self) -> PublishState:
@@ -313,5 +402,141 @@ class WikiManager:
 
     def connect(self, user: str, pswd:str) -> bool:
         """Connect to the wiki."""
-        return self.client.login(user, pswd)
+        result = self.client.connect(user=user, password=pswd)
+        if result:
+            self._wiki_user = user
+        return result
+
+    async def connect_async(self, user: str, pswd: str) -> bool:
+        """Async version of connect. Connect to the wiki."""
+        result = await self.client.connect_async(user=user, password=pswd)
+        if result:
+            self._wiki_user = user
+        return result
+
+    async def publish_all_pages_async(self, pages: List[OcxGlobalElement],
+                                     max_concurrent: int = 10) -> List[bool]:
+        """Publish multiple pages concurrently.
+
+        Arguments:
+            pages: List of OCX global elements to publish
+            max_concurrent: Maximum number of concurrent publish operations
+
+        Returns:
+            List of results (True/False) for each page
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def publish_with_semaphore(page):
+            async with semaphore:
+                return await self.publish_page_async(page)
+
+        tasks = [publish_with_semaphore(page) for page in pages]
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def publish_all_enums_async(self, enums: Dict[str, OcxEnumerator],
+                                     max_concurrent: int = 10) -> List[bool]:
+        """Publish multiple enums concurrently.
+
+        Arguments:
+            enums: Dictionary of enums to publish
+            max_concurrent: Maximum number of concurrent publish operations
+
+        Returns:
+            List of results (True/False) for each enum
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def publish_with_semaphore(enum):
+            async with semaphore:
+                return await self.publish_enum_async(enum)
+
+        tasks = [publish_with_semaphore(enum) for enum in enums.values()]
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def publish_all_attributes_async(self, attributes: List[SchemaAttribute],
+                                          max_concurrent: int = 10) -> List[bool]:
+        """Publish multiple attributes concurrently.
+
+        Arguments:
+            attributes: List of attributes to publish
+            max_concurrent: Maximum number of concurrent publish operations
+
+        Returns:
+            List of results (True/False) for each attribute
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def publish_with_semaphore(attr):
+            async with semaphore:
+                return await self.publish_attribute_async(attr)
+
+        tasks = [publish_with_semaphore(attr) for attr in attributes]
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def publish_all_simple_types_async(self, simple_types: List[SchemaAttribute],
+                                            max_concurrent: int = 10) -> List[bool]:
+        """Publish multiple simple types concurrently.
+
+        Arguments:
+            simple_types: List of simple types to publish
+            max_concurrent: Maximum number of concurrent publish operations
+
+        Returns:
+            List of results (True/False) for each simple type
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def publish_with_semaphore(simple_type):
+            async with semaphore:
+                return await self.publish_simple_type_async(simple_type)
+
+        tasks = [publish_with_semaphore(st) for st in simple_types]
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def publish_complete_schema_async(self, max_concurrent: int = 10) -> Dict[str, int]:
+        """Publish the complete schema asynchronously.
+
+        Arguments:
+            max_concurrent: Maximum number of concurrent publish operations
+
+        Returns:
+            Dictionary with counts of published items
+        """
+        if self.transformer is None:
+            raise OcxWikiError('No schema url has been processed.')
+
+        results = {
+            'pages': 0,
+            'enums': 0,
+            'attributes': 0,
+            'simple_types': 0,
+            'errors': []
+        }
+
+        # Publish all pages
+        pages = self.transformer.get_ocx_elements()
+        page_results = await self.publish_all_pages_async(pages, max_concurrent)
+        results['pages'] = sum(1 for r in page_results if r is True)
+        results['errors'].extend([r for r in page_results if isinstance(r, Exception)])
+
+        # Publish all enums
+        enums = self.transformer.get_enumerators()
+        enum_results = await self.publish_all_enums_async(enums, max_concurrent)
+        results['enums'] = sum(1 for r in enum_results if r is True)
+        results['errors'].extend([r for r in enum_results if isinstance(r, Exception)])
+
+        # Publish all attributes
+        attributes = self.transformer.get_global_attributes()
+        attr_results = await self.publish_all_attributes_async(attributes, max_concurrent)
+        results['attributes'] = sum(1 for r in attr_results if r is True)
+        results['errors'].extend([r for r in attr_results if isinstance(r, Exception)])
+
+        # Publish all simple types
+        simple_types = self.transformer.get_simple_types()
+        st_results = await self.publish_all_simple_types_async(simple_types, max_concurrent)
+        results['simple_types'] = sum(1 for r in st_results if r is True)
+        results['errors'].extend([r for r in st_results if isinstance(r, Exception)])
+
+        return results
 

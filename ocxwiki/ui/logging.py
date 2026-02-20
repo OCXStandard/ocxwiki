@@ -15,13 +15,14 @@ class TextualLogHandler:
     def __init__(self, log_widget: RichLog):
         self.log_widget = log_widget
 
-    def write(self, message) -> None:
-        """Write log message to the widget."""
+    def __call__(self, message) -> None:
+        """Write log message to the widget. Called by loguru."""
         record = message.record
         level = record["level"].name
         color = self.LEVEL_COLORS.get(level, "white")
+        timestamp = record["time"].strftime("%H:%M:%S")
 
-        text = f"[{color}]{level: <8}[/{color}] | [cyan]{record['name']}[/cyan]:[cyan]{record['function']}[/cyan] - {record['message']}"
+        text = f"[dim]{timestamp}[/dim] [{color}]{level: <8}[/{color}] | [cyan]{record['name']}[/cyan]:[cyan]{record['function']}[/cyan] - {record['message']}"
         self.log_widget.write(text)
 
 

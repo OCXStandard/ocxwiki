@@ -10,6 +10,7 @@ class AppConfig:
             "app_name": "CLI App",
             "history_file": "~/.cli_app_history",
             "max_history": "100",
+            "log_level": "INFO",
         },
         "display": {
             "theme": "default",
@@ -20,18 +21,23 @@ class AppConfig:
     def __init__(self, config_path: str = None):
         self.config = configparser.ConfigParser()
         self.config_path = Path(config_path or "~/.cli_app.ini").expanduser()
-        self._load_defaults()
         self.load()
+        self._apply_defaults()
 
-    def _load_defaults(self) -> None:
-        """Load default configuration."""
+    def _apply_defaults(self) -> None:
+        """Apply default configuration only for missing sections/keys."""
         for section, options in self.DEFAULT_CONFIG.items():
-            self.config[section] = options
+            if section not in self.config:
+                self.config[section] = {}
+            for key, value in options.items():
+                if key not in self.config[section]:
+                    self.config[section][key] = value
 
     def load(self) -> None:
         """Load configuration from file."""
         if self.config_path.exists():
             self.config.read(self.config_path)
+        # If file doesn't exist, config will be empty and defaults will be applied
 
     def save(self) -> None:
         """Save configuration to file."""

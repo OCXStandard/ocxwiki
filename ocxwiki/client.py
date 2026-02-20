@@ -6,6 +6,8 @@ from typing import Dict, OrderedDict, Optional
 import datetime
 import requests.exceptions as http_error
 from pathlib import Path
+import asyncio
+from functools import partial
 # Third party imports
 from dokuwiki import DokuWiki, DokuWikiError
 from loguru import logger
@@ -28,27 +30,30 @@ class WikiClient:
 
     """
 
-    def __init__(self):
-        self._url = ""
-        self._wiki = None
-        self._connected = False
+    def __init__(self, url:str=WIKI_URL):
+        self._url:str = url
+        self._wiki:DokuWiki = None
+        self._connected:bool = False
 
-    def connect(self, url: str = WIKI_URL, user: str = USER, password=PSWD)-> bool:
+    def connect(self, user: str = USER, password=PSWD)-> bool:
         try:
-            self._wiki = DokuWiki(url, user, password)
+            self._wiki = DokuWiki(url=self._url, user=user, password=password)
 
         except DokuWikiError as e:
-            logger.error(f'Connecting to {url} failed: {e}')
-        except Exception as e:
-            logger.error(f'Connecting to {url} failed: {e}')
+            logger.error(f'Connecting to {self._url} failed: {e}')
         if self._wiki is None:
-            raise DokuWikiError(f'Failed to connect to {url}')
+            raise DokuWikiError(f'Failed to connect to {self._url}')
         else:
             self._connected = True
             logger.info(f'Connected to {self._url}')
             logger.info(f'Dokuwiki version: {self._wiki.version}')
             logger.info(f'XMLRPC version: {self._wiki.xmlrpc_version}')
         return self._connected
+
+    async def connect_async(self, user: str = USER, password=PSWD) -> bool:
+        """Async wrapper for connect."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, partial(self.connect, user, password))
 
     def is_connected(self) -> bool:
         """True if a connection to the ocxwiki is established, False otherwise."""
@@ -69,11 +74,11 @@ class WikiClient:
         try:
             self._wiki.login(user, password)
             self._connected = True
-            return True
+            return self._connected
         except (DokuWikiError, Exception) as err:
             logger.error(f'Unable to connect: {err}')
             self._connected = False
-        return self._connected
+            return self._connected
 
     def wiki_version(self) -> str:
         """Return the ocxwiki dokuwiki version."""
@@ -130,6 +135,15 @@ class WikiClient:
             logger.error(e)
         return result
 
+    async def append_page_async(self, page: str, content: str, summary: str, namespace: str = DEFAULT_NSP,
+                               minor: bool = False):
+        """Async wrapper for append_page."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            partial(self.append_page, page, content, summary, namespace, minor)
+        )
+
     def set_page(self, page: str, content: str, summary: str, namespace: str = DEFAULT_NSP,
                  minor: bool = False) -> bool:
         """Set/replace the content of ''page''.
@@ -154,6 +168,15 @@ class WikiClient:
             logger.error(e)
         return result
 
+    async def set_page_async(self, page: str, content: str, summary: str, namespace: str = DEFAULT_NSP,
+                            minor: bool = False) -> bool:
+        """Async wrapper for set_page."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            partial(self.set_page, page, content, summary, namespace, minor)
+        )
+
     # Data structs
     def get_data(self, page: str, keep_order: bool = True) -> Dict:
         """Get the structured data of the latest version of a given page.
@@ -170,6 +193,11 @@ class WikiClient:
         except DokuWikiError as e:
             logger.error(e)
         return data
+
+    def get_page_info(self, page: str) -> Dict:
+        """Get the page information of ''page''."""
+        return self._wiki.pages.info(page)
+
 
     # Wiki media
     def list_media(self, namespace: str, depth: int = 0, md5_hash: bool = False, skip_acl: bool = False,

@@ -4,6 +4,7 @@ import os
 from dotenv  import load_dotenv
 from pathlib import Path
 from ocx_schema_parser.utils import utilities
+from loguru import logger
 
 __app_name__ = "ocxwiki"
 __version__ = '1.0.0'
