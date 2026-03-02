@@ -11,13 +11,24 @@ from ocxwiki import WORKING_DRAFT, SCHEMA_FOLDER, WIKI_URL, TEST_WIKI_URL, USER,
 from ocxwiki.wiki_manager import WikiManager
 
 
-def ocx(manager, interactive: bool = True, element: str= 'ocx:SectionRef'):
+manager = WikiManager(
+    wiki_url=WIKI_URL)
 
-    ocx = manager.transformer.get_ocx_element_from_type(element)
-    if ocx is not None:
-        success =  manager.publish_page(ocx)
-        if success:
-            print(f'Published page {element}')
-        else:
-            print(f'Failed publishing {element}')
+def ocx_children(manager,element: str= 'ocx:Plate'):
 
+    manager.connect(USER, PSWD)
+    if manager.client.is_connected():
+        print(f"Connected to wiki")
+        manager.process_schema(url=WORKING_DRAFT, download_folder=Path(SCHEMA_FOLDER))
+        ocx = manager.transformer.get_ocx_element_from_type(element)
+        if ocx is not None:
+            children = ocx.get_children()
+            for child in children:
+                print(f'Child: {child.name[1]}')
+    else:
+        print(f"Failed to connect to wiki")
+        return
+
+
+if __name__ == "__main__":
+    ocx_children(manager)

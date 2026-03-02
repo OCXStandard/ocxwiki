@@ -15,14 +15,13 @@ import datetime
 from lxml.etree import QName
 
 # Module imports
-import ocx_schema_parser
 from ocx_schema_parser.xelement import LxmlElement
 from ocx_schema_parser.transformer import Transformer
 from ocx_schema_parser.elements import OcxGlobalElement
 from ocx_schema_parser.data_classes import OcxEnumerator, SchemaAttribute
 import ocxwiki
 from ocxwiki.client import WikiClient
-from ocxwiki.renderer import Render
+from ocxwiki.render import Render
 from ocxwiki.error import OcxWikiError
 from ocxwiki.struct_data import WikiSchema
 
@@ -415,12 +414,14 @@ class WikiManager:
         return result
 
     async def publish_all_pages_async(self, pages: List[OcxGlobalElement],
-                                     max_concurrent: int = 10) -> List[bool]:
+                                     max_concurrent: int = 10,
+                                     progress_callback: Optional[callable] = None) -> List[bool]:
         """Publish multiple pages concurrently.
 
         Arguments:
             pages: List of OCX global elements to publish
             max_concurrent: Maximum number of concurrent publish operations
+            progress_callback: Optional callable(advance, total, description) for progress updates
 
         Returns:
             List of results (True/False) for each page
@@ -429,18 +430,26 @@ class WikiManager:
 
         async def publish_with_semaphore(page):
             async with semaphore:
-                return await self.publish_page_async(page)
+                result = await self.publish_page_async(page)
+                if progress_callback is not None:
+                    try:
+                        progress_callback(1, None, f'Page: {page.get_name()}')
+                    except Exception:
+                        pass
+                return result
 
         tasks = [publish_with_semaphore(page) for page in pages]
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     async def publish_all_enums_async(self, enums: Dict[str, OcxEnumerator],
-                                     max_concurrent: int = 10) -> List[bool]:
+                                     max_concurrent: int = 10,
+                                     progress_callback: Optional[callable] = None) -> List[bool]:
         """Publish multiple enums concurrently.
 
         Arguments:
             enums: Dictionary of enums to publish
             max_concurrent: Maximum number of concurrent publish operations
+            progress_callback: Optional callable(advance, total, description) for progress updates
 
         Returns:
             List of results (True/False) for each enum
@@ -449,18 +458,26 @@ class WikiManager:
 
         async def publish_with_semaphore(enum):
             async with semaphore:
-                return await self.publish_enum_async(enum)
+                result = await self.publish_enum_async(enum)
+                if progress_callback is not None:
+                    try:
+                        progress_callback(1, None, f'Enum: {enum.name}')
+                    except Exception:
+                        pass
+                return result
 
         tasks = [publish_with_semaphore(enum) for enum in enums.values()]
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     async def publish_all_attributes_async(self, attributes: List[SchemaAttribute],
-                                          max_concurrent: int = 10) -> List[bool]:
+                                          max_concurrent: int = 10,
+                                          progress_callback: Optional[callable] = None) -> List[bool]:
         """Publish multiple attributes concurrently.
 
         Arguments:
             attributes: List of attributes to publish
             max_concurrent: Maximum number of concurrent publish operations
+            progress_callback: Optional callable(advance, total, description) for progress updates
 
         Returns:
             List of results (True/False) for each attribute
@@ -469,18 +486,26 @@ class WikiManager:
 
         async def publish_with_semaphore(attr):
             async with semaphore:
-                return await self.publish_attribute_async(attr)
+                result = await self.publish_attribute_async(attr)
+                if progress_callback is not None:
+                    try:
+                        progress_callback(1, None, f'Attribute: {attr.name}')
+                    except Exception:
+                        pass
+                return result
 
         tasks = [publish_with_semaphore(attr) for attr in attributes]
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     async def publish_all_simple_types_async(self, simple_types: List[SchemaAttribute],
-                                            max_concurrent: int = 10) -> List[bool]:
+                                            max_concurrent: int = 10,
+                                            progress_callback: Optional[callable] = None) -> List[bool]:
         """Publish multiple simple types concurrently.
 
         Arguments:
             simple_types: List of simple types to publish
             max_concurrent: Maximum number of concurrent publish operations
+            progress_callback: Optional callable(advance, total, description) for progress updates
 
         Returns:
             List of results (True/False) for each simple type
@@ -489,22 +514,34 @@ class WikiManager:
 
         async def publish_with_semaphore(simple_type):
             async with semaphore:
-                return await self.publish_simple_type_async(simple_type)
+                result = await self.publish_simple_type_async(simple_type)
+                if progress_callback is not None:
+                    try:
+                        progress_callback(1, None, f'SimpleType: {simple_type.name}')
+                    except Exception:
+                        pass
+                return result
 
         tasks = [publish_with_semaphore(st) for st in simple_types]
         return await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def publish_complete_schema_async(self, max_concurrent: int = 10) -> Dict[str, int]:
+    async def publish_complete_schema_async(self, max_concurrent: int = 10,
+                                           progress_callback: Optional[callable] = None) -> Dict[str, Union[int, List]]:
         """Publish the complete schema asynchronously.
 
         Arguments:
             max_concurrent: Maximum number of concurrent publish operations
+            progress_callback: Optional callable(advance, total, description) called after each
+                published item. ``advance`` is always 1; ``total`` is set once at the start
+                with the grand total so the TUI can initialise the progress bar.
 
         Returns:
             Dictionary with counts of published items
         """
         if self.transformer is None:
             raise OcxWikiError('No schema url has been processed.')
+        if not self._client.is_connected():
+            raise OcxWikiError('Not connected to the wiki. Call connect() first.')
 
         results = {
             'pages': 0,
@@ -514,29 +551,42 @@ class WikiManager:
             'errors': []
         }
 
-        # Publish all pages
+        # Calculate grand total so the TUI can initialise the progress bar
         pages = self.transformer.get_ocx_elements()
-        page_results = await self.publish_all_pages_async(pages, max_concurrent)
+        enums = self.transformer.get_enumerators()
+        attributes = self.transformer.get_global_attributes()
+        simple_types = self.transformer.get_simple_types()
+        grand_total = len(pages) + len(enums) + len(attributes) + len(simple_types)
+
+        if progress_callback is not None:
+            try:
+                # Signal the total using advance=0 and total=grand_total
+                progress_callback(0, grand_total, 'Starting…')
+            except Exception:
+                pass
+
+        # Publish all pages
+        page_results = await self.publish_all_pages_async(pages, max_concurrent, progress_callback)
         results['pages'] = sum(1 for r in page_results if r is True)
         results['errors'].extend([r for r in page_results if isinstance(r, Exception)])
 
         # Publish all enums
-        enums = self.transformer.get_enumerators()
-        enum_results = await self.publish_all_enums_async(enums, max_concurrent)
+        enum_results = await self.publish_all_enums_async(enums, max_concurrent, progress_callback)
         results['enums'] = sum(1 for r in enum_results if r is True)
         results['errors'].extend([r for r in enum_results if isinstance(r, Exception)])
 
         # Publish all attributes
-        attributes = self.transformer.get_global_attributes()
-        attr_results = await self.publish_all_attributes_async(attributes, max_concurrent)
+        attr_results = await self.publish_all_attributes_async(attributes, max_concurrent, progress_callback)
         results['attributes'] = sum(1 for r in attr_results if r is True)
         results['errors'].extend([r for r in attr_results if isinstance(r, Exception)])
 
         # Publish all simple types
-        simple_types = self.transformer.get_simple_types()
-        st_results = await self.publish_all_simple_types_async(simple_types, max_concurrent)
+        st_results = await self.publish_all_simple_types_async(simple_types, max_concurrent, progress_callback)
         results['simple_types'] = sum(1 for r in st_results if r is True)
         results['errors'].extend([r for r in st_results if isinstance(r, Exception)])
 
+        results['total'] = grand_total
         return results
+
+
 

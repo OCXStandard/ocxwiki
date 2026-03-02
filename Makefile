@@ -2,33 +2,42 @@
 # You can set these variables from the command line, and also
 # from the environment for the first two.
 SOURCEDIR = ./ocxwiki
-CONDA_ENV = ocxwiki
 PACKAGE := ocxwiki
 
-conda-create:  ## Create a new conda environment with the python version and basic development tools
-	@conda env create -f environment.yml
-	@conda activate $(CONDA_ENV)
-cc: conda-create
-.PHONY: cc
-conda-upd:  ## Update the conda development environment when environment.yml has changed
-	@conda env update -f environment.yml
-.PHONY:conda-update
+uv-install:  ## Install all project dependencies using uv
+	@uv sync
+ui: uv-install
+.PHONY: ui
 
-conda-activate: ## Activate the conda environment for the project
-	@conda activate $(CONDA_ENV)
-ca: conda-activate
-.PHONY: ca
+uv-install-dev:  ## Install project and dev dependencies using uv
+	@uv sync --extra dev
+uid: uv-install-dev
+.PHONY: uid
 
-conda-clean: ## Purge all conda tarballs, log files and caches
-	conda clean -a -y
-.Phony: conda-clean
+uv-update:  ## Update all dependencies to their latest allowed versions
+	@uv lock --upgrade
+	@uv sync
+uu: uv-update
+.PHONY: uu
 
+uv-add:  ## Add a new dependency: make uv-add pkg=<package>
+	@uv add $(pkg)
+ua: uv-add
+.PHONY: ua
 
-# PROJECT DEPENDENCIES ########################################################
+uv-remove:  ## Remove a dependency: make uv-remove pkg=<package>
+	@uv remove $(pkg)
+ur: uv-remove
+.PHONY: ur
 
-# VIRTUAL_ENV ?= ${VENV}
-# DEPENDENCIES := $(VIRTUAL_ENV)/$(shell cksum pyproject.toml)
+uv-lock:  ## Regenerate the uv.lock file without installing
+	@uv lock
+ul: uv-lock
+.PHONY: ul
 
+venv:  ## Create a virtual environment using uv
+	@uv venv
+.PHONY: venv
 
 # Color output
 BLUE='\033[0;34m'
@@ -38,7 +47,7 @@ NC='\033[0m' # No Color
 SPHINXBUILD = sphinx-build -E -b html docs dist/docs
 COVDIR = "htmlcov"
 
-doc-serve: ## Open the the html docs built by Sphinx
+doc-serve: ## Open the html docs built by Sphinx
 	@cmd /c start "dist/docs/index.html"
 
 ds: doc-serve
@@ -51,29 +60,28 @@ doc: ## Build the html docs using Sphinx. For other Sphinx options, run make in 
 	@$(SPHINXBUILD)  -M clean "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 	@$(SPHINXBUILD)  "$(SOURCEDIR)" "$(BUILDDIR)/$(SPHINXOPTS)" -b "$(SPHINXOPTS)"
 
-poetry-fix:  ## Force pip poetry re-installation
-	@pip install poetry --upgrade
-
-
 # RUN ##################################################################
 
+run: ## Start ocxwiki CLI in batch mode
+	@uv run python cli.py
+.PHONY: run
 
-run: ## Start ocxwiki CLI
-	@python cli.py
-PHONY: run
+interactive: ## Start ocxwiki CLI in interactive mode
+	@uv run python cli.py interactive
+.PHONY: interactive
+
 # TESTS #######################################################################
 
 FAILURES := .pytest_cache/pytest/v/cache/lastfailed
 
 test:  ## Run unit and integration tests
-	#@pytest --durations=5  --cov-report html --cov src .
-	@pytest
+	@uv run pytest
 
 test-upd:  ## Update the regression tests baseline
-	@pytest --force-regen
+	@uv run pytest --force-regen
 
 tu: test-upd
-PHONY: tu
+.PHONY: tu
 
 test-cov:  ## Show the test coverage report
 	cmd /c start $(CURDIR)/$(COVDIR)/index.html
@@ -81,24 +89,25 @@ test-cov:  ## Show the test coverage report
 tc: test-cov
 .PHONY: tc
 
-PHONY: test-upd, test-cov
 # CHECKS ######################################################################
-check-lint:	## Run formatters, linters, and static code security scanners bandit and jake
-	@printf "\n${BLUE}Running black against source and test files...${NC}\n"
-	@black . -v
-	@printf "${BLUE}\nRunning Flake8 against source and test files...${NC}\n"
-	@flake8 -v
-
+check-lint:  ## Run ruff linter and formatter with auto-fix
+	@printf "\n${BLUE}Running ruff check with auto-fix...${NC}\n"
+	@uv run ruff check . --fix
+	@printf "${BLUE}\nRunning ruff format...${NC}\n"
+	@uv run ruff format .
 
 # BUILD #######################################################################
 
-build-exe:   ## Build a bundled package (on windows: an exe file) executable using pyinstaller
-	@pyinstaller main.spec
+build:  ## Build the package using uv
+	@uv build
+.PHONY: build
+
+build-exe:  ## Build a bundled executable using pyinstaller
+	@uv run pyinstaller main.spec
 .PHONY: build-exe
 
 
 # HELP ########################################################################
-
 
 .PHONY: help
 help: ## Show this help
@@ -107,6 +116,8 @@ help: ## Show this help
 .DEFAULT_GOAL := help
 
 #-----------------------------------------------------------------------------------------------
+
+
 
 
 

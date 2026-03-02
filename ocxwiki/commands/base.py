@@ -3,10 +3,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Callable, Optional
 
 from loguru import logger
 import typer
 from typer.testing import CliRunner
+
+if TYPE_CHECKING:
+    from ocxwiki.app import CLIApp
 
 
 @dataclass
@@ -20,24 +24,62 @@ class DispatchResult:
 async def dispatch_typer_command(
     app: typer.Typer,
     args: Sequence[str],
+    confirm_callback: Optional[Callable[[str], bool]] = None,
+    progress_callback: Optional[Callable] = None,
+    summary_callback: Optional[Callable] = None,
 ) -> DispatchResult:
     """
     Dispatch a Typer command asynchronously using CliRunner.
 
+    The shared ``WikiManager`` singleton is always injected into *ctx.obj* so
+    that every command—regardless of invocation order—operates on the same
+    instance (same connection, same processed schema, same state).
+
     Args:
         app: The Typer application instance
-        args: Command arguments to pass (e.g., ["serialize", "excel", "--file-name", "test.xlsx"])
+        args: Command arguments to pass (e.g., ["wiki", "connect", "--user", "me"])
+        confirm_callback: Optional callable that receives a confirmation message and
+            returns ``True``/``False``.  When provided it is injected into
+            ``ctx.obj['confirm_callback']`` so that :func:`wiki_cli.wiki_confirm`
+            can use it instead of blocking on ``typer.confirm``.
+        progress_callback: Optional callable(advance, total, description) injected into
+            ``ctx.obj['progress_callback']``.  Commands call it after each published item
+            so the TUI progress bar can be updated.  ``advance=0`` with a non-None
+            ``total`` signals the grand total at the start of the operation.
+        summary_callback: Optional callable(text) injected into
+            ``ctx.obj['summary_callback']``.  Commands call it with a final summary
+            string when the operation is complete so the TUI can display it.
 
     Returns:
         DispatchResult containing exit code, stdout, stderr, and help text
     """
+    # Import here to avoid circular imports at module load time.
+    from ocxwiki.wiki_cli import get_wiki_manager  # noqa: PLC0415
+
     runner = CliRunner()
+
+    def _build_obj(base_obj: dict | None) -> dict:
+        obj = dict(base_obj) if base_obj else {}
+        # Always inject the shared singleton so every CliRunner invocation
+        # sees the same WikiManager (connection + processed schema are preserved).
+        obj.setdefault('wiki_manager', get_wiki_manager())
+        if confirm_callback is not None:
+            obj['confirm_callback'] = confirm_callback
+        if progress_callback is not None:
+            obj['progress_callback'] = progress_callback
+        if summary_callback is not None:
+            obj['summary_callback'] = summary_callback
+        return obj
 
     def _invoke(argv: list[str]):
         logger.debug(f"Invoking with argv: {argv}")
-        # Avoid passing a problematic prog_name that can be a DefaultPlaceholder in Typer/Click
-        # which breaks help rendering with AttributeError: 'DefaultPlaceholder' has no attribute 'lstrip'
-        result = runner.invoke(app, argv, catch_exceptions=True)
+        obj = _build_obj(None)
+        logger.debug(
+            f"Invoking with wiki_manager id={id(obj['wiki_manager'])}, "
+            f"connected={obj['wiki_manager']._client.is_connected()}, "
+            f"has_transformer={obj['wiki_manager'].transformer is not None}"
+        )
+        result = runner.invoke(app, argv, catch_exceptions=True, obj=obj)
         logger.debug(f"Result: exit_code={result.exit_code}")
         if result.exception:
             logger.error(f"Exception during invoke: {result.exception}")
@@ -46,7 +88,6 @@ async def dispatch_typer_command(
         return result
 
     try:
-        # Execute the command
         result = await asyncio.to_thread(_invoke, list(args))
 
         logger.debug(
@@ -55,13 +96,11 @@ async def dispatch_typer_command(
             f"stderr_len={len(result.stderr) if result.stderr else 0}"
         )
 
-        # Only get help text if the command failed or if explicitly requested
         help_text = ""
         if "--help" in args:
             help_text = result.stdout
             logger.debug(f"Help requested, help_text length: {len(help_text)}")
         elif result.exit_code != 0 and not result.stdout and not result.stderr:
-            # Only fetch help if command failed silently
             help_result = await asyncio.to_thread(_invoke, list(args) + ["--help"])
             help_text = help_result.stdout
             logger.debug(f"Command failed, fetched help_text length: {len(help_text)}")
@@ -74,7 +113,6 @@ async def dispatch_typer_command(
         )
     except Exception as e:
         logger.exception(f"Error dispatching command: {e}")
-        # Return a user-friendly error message
         return DispatchResult(
             exit_code=1,
             stdout="",

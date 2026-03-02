@@ -1,6 +1,6 @@
 [project]
 name = "ocxwiki"
-version = "1.0.0"
+version = "2.0.0"
 description = "A python package creating wiki documentation of the OCX"
 readme = "README.md"
 authors = [
@@ -10,11 +10,11 @@ requires-python = ">=3.11,<4.0"
 
 # Runtime dependencies
 dependencies = [
-    "xsdata==23.8",
+    "xsdata>=26.0",
     "click-shell",
     "typer",
-    "ocx==3.0.1",
-    "ocx-schema-parser>=1.8.0",
+    "ocx>=3.1.0",
+    "ocx-schema-parser>=2.0.1",
     "spellchecker",
     "arrow",
     "dokuwiki",
@@ -24,6 +24,7 @@ dependencies = [
     "pregex",
     "rich>=13.5.2",
     "textual>=7.5.0",
+    "pytest-asyncio>=0.21.0",
 ]
 
 [project.optional-dependencies]

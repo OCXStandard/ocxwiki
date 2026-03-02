@@ -43,5 +43,11 @@ class TestWikiManagerPageInfo:
         assert len(page_info) == 0
 
 
+    def test_list_pages(self, wiki_manager):
+        """Test retrieval of non-existent page information."""
+        client = wiki_manager.client
+        page_info = client.list_pages('public:schema:3.1.0:ocx')
+        assert (len(page_info) == 322)  # For OCX version 3.1.0 there are 322 pages in this namespace
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

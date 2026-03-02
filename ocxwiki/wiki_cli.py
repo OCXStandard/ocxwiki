@@ -3,26 +3,43 @@
 
 
 # Sys imports
-import sys
 from collections import defaultdict
-import asyncio
 # Third party imports
-from loguru import logger
 import arrow
 import typer
+from loguru import logger
 from rich import print
 from rich.progress import track
-from pathlib import Path
 from typing_extensions import Annotated
 
 # Module imports
-from ocxwiki import __app_name__, __version__, WIKI_URL, WORKING_DRAFT, USER, TEST_PSWD, PSWD, TEST_WIKI_URL, \
-    SCHEMA_FOLDER
+from ocxwiki import __app_name__, __version__, WIKI_URL, USER, PSWD
 from ocxwiki.wiki_manager import WikiManager, PublishState
 from ocxwiki.async_helper import run_async
 from tabulate import tabulate
 
 wiki = typer.Typer()
+
+
+def wiki_confirm(ctx: typer.Context, message: str) -> bool:
+    """Prompt for confirmation, using the TUI callback if available.
+
+    If ``ctx.obj`` contains a callable ``'confirm_callback'`` it is called with
+    *message* and must return a bool.  This lets the Textual TUI intercept the
+    confirmation and show its own dialog instead of blocking on stdin.
+    Otherwise falls back to the standard :func:`typer.confirm` prompt.
+
+    Args:
+        ctx: The active Typer context.
+        message: The confirmation question to show the user.
+
+    Returns:
+        ``True`` if the user confirmed, ``False`` otherwise.
+    """
+    confirm_cb = (ctx.obj or {}).get('confirm_callback')
+    if callable(confirm_cb):
+        return bool(confirm_cb(message))
+    return typer.confirm(message)
 
 # rich markup
 MK_COLOR = 'blue'
@@ -39,6 +56,16 @@ def get_wiki_manager() -> WikiManager:
         _wiki_manager_instance = WikiManager(WIKI_URL)
     return _wiki_manager_instance
 
+
+def _get_wiki_manager(ctx: typer.Context) -> WikiManager:
+    """Retrieve the WikiManager from the Typer context, falling back to the singleton.
+
+    This is the preferred way to get the WikiManager inside a command so that
+    the singleton is always returned even when *ctx.obj* has not been populated
+    yet (e.g. when a CliRunner-based dispatch creates a fresh context dict).
+    """
+    return (ctx.obj or {}).get('wiki_manager') or get_wiki_manager()
+
 @wiki.callback()
 def main(ctx: typer.Context):
     """
@@ -46,7 +73,16 @@ def main(ctx: typer.Context):
     """
     if ctx.obj is None:
         ctx.obj = {}
-    ctx.obj['wiki_manager'] = get_wiki_manager()
+    # If wiki_manager was already injected by dispatch_typer_command (the common TUI path),
+    # keep it as-is so state (connection, transformer) is preserved across commands.
+    # Only create a new one when running outside the TUI (plain CLI invocation).
+    if 'wiki_manager' not in ctx.obj:
+        ctx.obj['wiki_manager'] = get_wiki_manager()
+    logger.debug(
+        f"wiki callback: wiki_manager id={id(ctx.obj['wiki_manager'])}, "
+        f"connected={ctx.obj['wiki_manager']._client.is_connected()}, "
+        f"has_transformer={ctx.obj['wiki_manager'].transformer is not None}"
+    )
 
 def markup(emphasis:str = MK_EMP, color:str = MK_COLOR) -> str:
     """Rich markup"""
@@ -62,40 +98,6 @@ def markup_end(emphasis:str = MK_EMP, color:str = MK_COLOR) -> str:
 #
 #         typer.prompt(f'')
 
-@wiki.command()
-def process_schema_url(
-        ctx: typer.Context,
-        url: Annotated[str, typer.Option(help='Process a schema for publishing.', prompt=True)] = WORKING_DRAFT,
-        folder: Annotated[Path, typer.Option(help='The schema download folder.')] = Path(SCHEMA_FOLDER),
-    ):
-    """Process a schema before publishing."""
-    wiki_manager = ctx.obj['wiki_manager']
-    if wiki_manager:
-        if result := wiki_manager.process_schema(url, folder): #ToDo: Fix error when processing a local file
-            schema_summary(ctx)
-
-@wiki.command()
-def process_schema_folder(
-        ctx: typer.Context,
-        folder: Annotated[Path, typer.Option(help='The schema download folder.', prompt=True)] = Path(SCHEMA_FOLDER),
-    ):
-    """Process a schema before publishing."""
-    wiki_manager = ctx.obj['wiki_manager']
-    if wiki_manager:
-        result =  wiki_manager.process_schema_folder(folder)
-        if result:
-            schema_summary(ctx)
-
-@wiki.command()
-def schema_summary(ctx: typer.Context):
-    """Print a summary of the processed schema."""
-    wiki_manager = ctx.obj['wiki_manager']
-    if wiki_manager.transformer is not None:
-        for ns, tbl in wiki_manager.transformer.parser.tbl_summary().items():
-            print(f'Content of namespace {ns}:\n')
-            print(tabulate(tbl, headers='keys'),'\n')
-    else:
-        print('Process a schema first')
 
 @wiki.command()
 def version():
@@ -105,7 +107,7 @@ def version():
 @wiki.command()
 def publish_all(ctx: typer.Context):
     """Publish the complete schema to the ocxwiki."""
-    wiki_manager = ctx.obj['wiki_manager']
+    wiki_manager = _get_wiki_manager(ctx)
     if wiki_manager.transformer is not None:
         wikiurl = wiki_manager._client.current_url()
         namespace = wiki_manager.get_publish_namespace()
@@ -119,7 +121,7 @@ def publish_all(ctx: typer.Context):
               f'{markup()}{namespace}{markup_end()} ' \
               f'to the ocxwiki with url {wikiurl}\n'
         print(msg)
-        prompt = typer.confirm('OK to proceed?')
+        prompt = wiki_confirm(ctx, 'OK to proceed?')
 
         if prompt:
             publish_ocx(ctx, interactive=False)
@@ -137,7 +139,14 @@ def publish_all_async(
             help='Maximum number of concurrent publish operations')] = 10
 ):
     """Publish the complete schema to the ocxwiki using async operations for better performance."""
-    wiki_manager = ctx.obj['wiki_manager']
+    wiki_manager = (ctx.obj or {}).get('wiki_manager') or get_wiki_manager()
+    logger.debug(f'publish_all_async: wiki_manager={wiki_manager!r}, connected={wiki_manager._client.is_connected() if wiki_manager else False}')
+    if wiki_manager is None:
+        print('[bold red]Error:[/bold red] WikiManager not available. Please restart the application.')
+        return
+    if not wiki_manager._client.is_connected():
+        print('[bold red]Error:[/bold red] Not connected to the wiki. Please run [bold]wiki connect[/bold] first.')
+        return
     if wiki_manager.transformer is not None:
         wikiurl = wiki_manager._client.current_url()
         namespace = wiki_manager.get_publish_namespace()
@@ -152,24 +161,41 @@ def publish_all_async(
               f'to the ocxwiki with url {wikiurl}\n' \
               f'Using async mode with max {markup()}{max_concurrent}{markup_end()} concurrent operations\n'
         print(msg)
-        prompt = typer.confirm('OK to proceed?')
+        prompt = wiki_confirm(ctx, 'OK to proceed?')
 
         if prompt:
             print('Publishing schema asynchronously...')
-            results = run_async(wiki_manager.publish_complete_schema_async(max_concurrent))
+            # Extract optional TUI callbacks injected by dispatch_typer_command / app.py
+            progress_cb = (ctx.obj or {}).get('progress_callback')
+            summary_cb = (ctx.obj or {}).get('summary_callback')
+            results = run_async(wiki_manager.publish_complete_schema_async(max_concurrent,
+                                                                           progress_callback=progress_cb))
 
-            print(f'\n[green]✓[/green] Publishing complete!')
-            print(f'  Pages published: {results["pages"]}')
-            print(f'  Enums published: {results["enums"]}')
-            print(f'  Attributes published: {results["attributes"]}')
-            print(f'  Simple types published: {results["simple_types"]}')
-
+            # Build summary lines
+            summary_lines = [
+                f'\n[green]✓[/green] Publishing complete!',
+                f'  Pages published:       {results["pages"]}',
+                f'  Enums published:       {results["enums"]}',
+                f'  Attributes published:  {results["attributes"]}',
+                f'  Simple types published:{results["simple_types"]}',
+                f'  Total published:       {results.get("total", "?")}',
+            ]
             if results['errors']:
-                print(f'\n[red]⚠[/red] Errors encountered: {len(results["errors"])}')
-                for i, error in enumerate(results['errors'][:5], 1):  # Show first 5 errors
-                    print(f'  {i}. {error}')
+                summary_lines.append(f'\n[red]⚠[/red] Errors encountered: {len(results["errors"])}')
+                for i, error in enumerate(results['errors'][:5], 1):
+                    summary_lines.append(f'  {i}. {error}')
                 if len(results['errors']) > 5:
-                    print(f'  ... and {len(results["errors"]) - 5} more errors')
+                    summary_lines.append(f'  ... and {len(results["errors"]) - 5} more errors')
+
+            for line in summary_lines:
+                print(line)
+
+            # Send summary to TUI main window if a callback was provided
+            if callable(summary_cb):
+                try:
+                    summary_cb('\n'.join(summary_lines))
+                except Exception:
+                    pass
     else:
         print('Process a schema first')
 
@@ -182,7 +208,7 @@ def publish_state(
 
 ):
     """Set the publishing state (draft or public)."""
-    wiki_manager = ctx.obj['wiki_manager']
+    wiki_manager = _get_wiki_manager(ctx)
     publish_state = PublishState(not(draft))
     wiki_manager.set_publish_state(publish_state)
     print (wiki_manager.get_publish_state())
@@ -192,20 +218,23 @@ def list_pages(
          ctx: typer.Context,
          namespace: Annotated[str, typer.Option(
              help='All pages under the given namespace will be listed.',
-             prompt=True)] = '/ocx-if:draft:ocx',
+             prompt=True)] = 'public:schema:3.1.0:ocx',
 
 ):
     """List the pages in the namespace"""
-    wiki_manager = ctx.obj['wiki_manager']
+    wiki_manager = _get_wiki_manager(ctx)
     if wiki_manager is None:
         raise ValueError('WikiManager not found in context. Please ensure it is set up correctly.')
     result = wiki_manager._client.list_pages(namespace=namespace, md5_hash=False, skip_acl=True)
     tbl = defaultdict(list)
-    for id, mtime, rev, *all  in result.items():
-        tbl['Name'].append(str.replace(namespace,''))
-        tbl['Revised'].append(arrow.get(mtime).format('YYYY-MM-DD HH:mm:ss ZZ'))
-        tbl['Modified'].append(arrow.get(rev).format('YYYY-MM-DD HH:mm:ss ZZ'))
-    print(tabulate(result, headers='keys'))
+    for page in result:
+        tbl['Name'].append(page.get('id', ''))
+        rev = page.get('rev', 0)
+        mtime = page.get('mtime', 0)
+        tbl['Revised'].append(arrow.get(rev).format('YYYY-MM-DD HH:mm:ss ZZ') if rev else '')
+        tbl['Modified'].append(arrow.get(mtime).format('YYYY-MM-DD HH:mm:ss ZZ') if mtime else '')
+        tbl['Size'].append(page.get('bytes', ''))
+    print(tabulate(tbl, headers='keys'))
 
 @wiki.command()
 def page_info(
@@ -216,11 +245,11 @@ def page_info(
 
 ):
     """List the pages in the namespace"""
-    wiki_manager = ctx.obj['wiki_manager']
+    wiki_manager = _get_wiki_manager(ctx)
     if wiki_manager is None:
         raise ValueError('WikiManager not found in context. Please ensure it is set up correctly.')
-    result = wiki_manager._client.info(page=page, md5_hash=False, skip_acl=True)
-    return result
+    result = wiki_manager._client.get_page_info(page=page)
+    print(result)
 
 
 
@@ -233,7 +262,7 @@ def publish_ocx(
          help='Require a user confirmation before publishing.')] = True,
 ):
     """Publish a global schema element to the ocxwiki."""
-    wiki_manager = ctx.obj['wiki_manager']
+    wiki_manager = _get_wiki_manager(ctx)
     prompt = True
     pages = []
     if wiki_manager.transformer is not None:
@@ -253,7 +282,7 @@ def publish_ocx(
                   f'{markup()}{namespace}{markup_end()} ' \
                   f'to the ocxwiki with url {wikiurl}\n'
             print(msg)
-            prompt = typer.confirm('OK to proceed?')
+            prompt = wiki_confirm(ctx, 'OK to proceed?')
         total = 0
         if prompt:
             for ocx in track(pages, description="Publishing global elements..."):
@@ -271,7 +300,7 @@ def publish_attributes(
 
 ):
     """Publish all the global schema attributes to the ocxwiki."""
-    wiki_manager = ctx.obj['wiki_manager']
+    wiki_manager = _get_wiki_manager(ctx)
     prompt = True
     if wiki_manager.transformer is not None:
         attributes = wiki_manager.transformer.get_global_attributes()
@@ -282,7 +311,7 @@ def publish_attributes(
                   f'{markup()}{namespace}{markup_end()} ' \
                   f'to the ocxwiki with url {wikiurl}'
             print(msg)
-            prompt = typer.confirm('OK to proceed?')
+            prompt = wiki_confirm(ctx, 'OK to proceed?')
         total = 0
         if prompt:
             for attribute in track(attributes, description="Publishing attributes..."):
@@ -299,7 +328,7 @@ def publish_enums(
             help='Require a user confirmation before publishing.')] = True,
 ):
     """Publish the global schema enumerators to the ocxwiki."""
-    wiki_manager = ctx.obj['wiki_manager']
+    wiki_manager = _get_wiki_manager(ctx)
     prompt = True
     if wiki_manager.transformer is not None:
         enums = wiki_manager.transformer.get_enumerators()
@@ -310,7 +339,7 @@ def publish_enums(
                   f'{markup()}{namespace}{markup_end()} ' \
                   f'to the ocxwiki with url {wikiurl}'
             print(msg)
-            prompt = typer.confirm('OK to proceed?')
+            prompt = wiki_confirm(ctx, 'OK to proceed?')
         if prompt:
             total = 0
             for enum in track(enums, description="Publishing enumerators..."):
@@ -329,7 +358,7 @@ def publish_simple_types(
 
 ):
     """Publish the schema simple types to the ocxwiki."""
-    wiki_manager = ctx.obj['wiki_manager']
+    wiki_manager = _get_wiki_manager(ctx)
     prompt = True
     if wiki_manager.transformer is not None:
         simples = wiki_manager.transformer.get_simple_types()
@@ -340,7 +369,7 @@ def publish_simple_types(
                   f'{markup()}{namespace}{markup_end()} ' \
                   f'to the ocxwiki with url {wikiurl}'
             print(msg)
-            prompt = typer.confirm('OK to proceed?')
+            prompt = wiki_confirm(ctx, 'OK to proceed?')
         if prompt:
             total = 0
             for simple in track(simples, description="Publishing simpleType..."):
@@ -362,7 +391,7 @@ def connect(
         )] = None,
 ):
     """Connect to the ocxwiki."""
-    wiki_manager = ctx.obj['wiki_manager']
+    wiki_manager = _get_wiki_manager(ctx)
     # Use environment variables as fallback if not provided
     username = user if user else USER
     passwd = password if password else PSWD

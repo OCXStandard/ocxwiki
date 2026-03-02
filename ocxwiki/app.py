@@ -1,5 +1,6 @@
 from difflib import get_close_matches
-from typing import Optional
+from typing import Callable, Optional
+import threading
 
 import click
 from loguru import logger
@@ -70,6 +71,15 @@ class CLIApp(App):
         self._prompting_state: Optional[dict] = None  # Stores state for generic prompting
         self._prompt_queue: list = []  # Queue of prompts to collect
         self._collected_values: dict = {}  # Collected values from prompts
+
+        # Confirmation dialog state – used when a wiki command calls wiki_confirm()
+        # via the TUI confirm_callback injected into ctx.obj.
+        self._confirm_state: Optional[dict] = None
+        # {
+        #   'event': threading.Event,  # set when user answers
+        #   'result': bool,            # filled in by on_input_submitted
+        #   'message': str,            # the question to display
+        # }
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -325,7 +335,10 @@ class CLIApp(App):
     async def _dispatch_command_with_args(self, args: list[str]) -> None:
         """Dispatch a command with pre-built arguments."""
         logger.debug(f'Dispatching command with args: {args}')
-        result = await dispatch_typer_command(self.typer_cli, args)
+        result = await dispatch_typer_command(self.typer_cli, args,
+                                              confirm_callback=self._make_confirm_callback(),
+                                              progress_callback=self._make_progress_callback(),
+                                              summary_callback=self._make_summary_callback())
 
         if result.stdout:
             self.add_output(result.stdout)
@@ -334,10 +347,118 @@ class CLIApp(App):
         if result.exit_code != 0 and not result.stdout and not result.stderr and result.help_text:
             self.add_output(result.help_text)
 
+    def _make_confirm_callback(self) -> Callable[[str], bool]:
+        """Return a thread-safe confirm callback suitable for injection into ctx.obj.
+
+        The callback is called from the CliRunner worker thread (via
+        ``asyncio.to_thread``).  It posts the confirmation question to the TUI,
+        then *blocks* on a :class:`threading.Event` until the user answers in
+        the input box.  ``on_input_submitted`` resolves the event by calling
+        :meth:`_resolve_confirm`.
+        """
+
+        app_ref = self  # capture self for use inside the closure
+
+        def confirm_callback(message: str) -> bool:
+            event = threading.Event()
+            state = {"event": event, "result": False, "message": message}
+            # Post the state to the TUI thread via call_from_thread
+            app_ref.call_from_thread(app_ref._show_confirm_prompt, state)
+            # Block worker thread until the user answers
+            event.wait()
+            return state["result"]
+
+        return confirm_callback
+
+    def _make_progress_callback(self) -> Callable:
+        """Return a thread-safe progress callback for injection into ctx.obj.
+
+        The callback signature is ``(advance: float, total: float | None, description: str | None)``.
+        When ``advance == 0`` and ``total`` is not ``None`` the progress bar total is
+        initialised (called once at the start of the publish operation).  Subsequent
+        calls with ``advance == 1`` advance the bar by one step.
+
+        Because the callback is invoked from the CliRunner worker thread, all UI
+        mutations go through :meth:`call_from_thread`.
+        """
+        app_ref = self
+
+        def progress_callback(advance: float, total: Optional[float], description: Optional[str]) -> None:
+            def _update():
+                sink = getattr(app_ref, 'progress_sink', None)
+                if sink is None:
+                    return
+                if total is not None and advance == 0:
+                    sink.set_total(total)
+                    sink.reset()
+                else:
+                    sink.update(advance=advance, description=description)
+
+            try:
+                app_ref.call_from_thread(_update)
+            except Exception:
+                pass
+
+        return progress_callback
+
+    def _make_summary_callback(self) -> Callable:
+        """Return a thread-safe summary callback for injection into ctx.obj.
+
+        The callback receives a single string with the publish result summary and
+        writes it to the main output window via :meth:`call_from_thread`.
+        """
+        app_ref = self
+
+        def summary_callback(text: str) -> None:
+            def _show():
+                # Reset progress bar to complete
+                sink = getattr(app_ref, 'progress_sink', None)
+                if sink is not None:
+                    sink.complete()
+                app_ref.add_output(text)
+
+            try:
+                app_ref.call_from_thread(_show)
+            except Exception:
+                pass
+
+        return summary_callback
+
+    def _show_confirm_prompt(self, state: dict) -> None:
+        """Display the confirmation question in the TUI (runs on the UI thread)."""
+        self._confirm_state = state
+        message = state["message"]
+        self.add_output(f"[bold yellow]? {message} [Y/n]:[/bold yellow]")
+        input_widget = self.query_one("#input-box", Input)
+        input_widget.value = ""
+        input_widget.placeholder = f"{message} [Y/n]"
+
+    def _resolve_confirm(self, user_input: str) -> None:
+        """Resolve a pending confirmation with the user's answer (runs on UI thread)."""
+        state = self._confirm_state
+        if state is None:
+            return
+        answer = user_input.strip().lower()
+        state["result"] = answer in ("y", "yes", "")
+        self.add_output(
+            f"[dim]→ {'Yes' if state['result'] else 'No'}[/dim]"
+        )
+        input_widget = self.query_one("#input-box", Input)
+        input_widget.placeholder = "Enter command..."
+        # Clear confirm state before unblocking the worker thread to avoid re-entry
+        self._confirm_state = None
+        state["event"].set()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle command submission when Enter is pressed."""
         input_widget = event.input
         command = event.value.strip()
+
+        # Handle pending confirmation dialog (highest priority)
+        if self._confirm_state is not None:
+            self._resolve_confirm(command)
+            event.input.value = ""
+            return
 
         # Handle generic prompting mode
         if self._prompting_state is not None:
@@ -424,7 +545,10 @@ class CLIApp(App):
             return
 
         # Dispatch through typer CLI
-        result = await dispatch_typer_command(self.typer_cli, parts)
+        result = await dispatch_typer_command(self.typer_cli, parts,
+                                              confirm_callback=self._make_confirm_callback(),
+                                              progress_callback=self._make_progress_callback(),
+                                              summary_callback=self._make_summary_callback())
 
         # If --help was requested, show the help text
         if "--help" in parts:

@@ -27,7 +27,7 @@ def wiki_client():
 
     # Attempt login
     try:
-        result = client.login(USER, PSWD)
+        result = client.connect(USER, PSWD)
         if not result:
             pytest.fail("Wiki login failed: login() returned False")
     except DokuWikiError as e:
@@ -49,7 +49,7 @@ def wiki_empty_client():
     Raises:
         DokuWikiError: If login fails.
     """
-    client = WikiClient()
+    client = WikiClient(url=WIKI_URL)
 
     yield client
 

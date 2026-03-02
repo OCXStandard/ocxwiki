@@ -6,9 +6,9 @@ import sys
 from click import pass_context, clear, secho
 from ocxwiki import __app_name__, __version__
 from ocxwiki.wiki_cli import wiki
+from ocxwiki.schema.schema_cli import schema
 import typer
-from typing import Optional
-from pathlib import Path
+
 
 MODULE = 'ocx_schema_parser'
 
@@ -79,6 +79,7 @@ def disable_logging():
 
 # Register subcommands AFTER all direct commands
 cli.add_typer(wiki, name="wiki", help='Commands for OCX Wiki operations. Use "ocx-wiki wiki COMMAND --help" for details on each command.')
+cli.add_typer(schema, name="schema", help='Commands for processing and summarising OCX schema files.')
 
 if __name__ == "__main__":
     cli()

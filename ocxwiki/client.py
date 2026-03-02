@@ -4,6 +4,7 @@
 # System imports
 from typing import Dict, OrderedDict, Optional
 import datetime
+import threading
 import requests.exceptions as http_error
 from pathlib import Path
 import asyncio
@@ -30,15 +31,15 @@ class WikiClient:
 
     """
 
-    def __init__(self, url:str=WIKI_URL):
-        self._url:str = url
-        self._wiki:DokuWiki = None
-        self._connected:bool = False
+    def __init__(self, url: str = WIKI_URL):
+        self._url: str = url
+        self._wiki: DokuWiki = None  # Initialize with URL only; login will be done separately
+        self._connected: bool = False
+        self._lock = threading.Lock()  # Protect DokuWiki XML-RPC calls from concurrent threads
 
-    def connect(self, user: str = USER, password=PSWD)-> bool:
+    def connect(self, user: str = USER, password=PSWD) -> bool:
         try:
             self._wiki = DokuWiki(url=self._url, user=user, password=password)
-
         except DokuWikiError as e:
             logger.error(f'Connecting to {self._url} failed: {e}')
         if self._wiki is None:
@@ -52,7 +53,7 @@ class WikiClient:
 
     async def connect_async(self, user: str = USER, password=PSWD) -> bool:
         """Async wrapper for connect."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, partial(self.connect, user, password))
 
     def is_connected(self) -> bool:
@@ -70,7 +71,6 @@ class WikiClient:
             user: the wiki user
             password: The user password
         """
-
         try:
             self._wiki.login(user, password)
             self._connected = True
@@ -97,8 +97,9 @@ class WikiClient:
             md5_hash: do an md5 sum of content
             skip_acl: skip everything regardless of ACL
             namespace: List pages in this namespace.
-            """
+        """
         options = {'depth': depth, 'hash': md5_hash, 'skipacl': skip_acl}
+        logger.debug(f'Listing pages in namespace "{namespace}" with options: {options}')
         return self._wiki.pages.list(namespace, **options)
 
     def changes(self, timestamp: datetime):
@@ -109,7 +110,7 @@ class WikiClient:
 
         Returns:
             Returns a list of changes since given timestamp.
-            """
+        """
         return self._wiki.pages.changes(timestamp)
 
     def append_page(self, page: str, content: str, summary: str, namespace: str = DEFAULT_NSP,
@@ -122,23 +123,20 @@ class WikiClient:
             content: content to be appended to the page
             summary: Change summary
             minor: Whether this is a minor change
-
-
-        Returns:
-
-            """
+        """
         wiki_page = f'{namespace}:{page}'
         result = False
         try:
-            result = self._wiki.pages.append(wiki_page, content, summary, minor)
+            with self._lock:
+                result = self._wiki.pages.append(wiki_page, content, summary, minor)
         except DokuWikiError as e:
             logger.error(e)
         return result
 
     async def append_page_async(self, page: str, content: str, summary: str, namespace: str = DEFAULT_NSP,
-                               minor: bool = False):
+                                minor: bool = False):
         """Async wrapper for append_page."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             partial(self.append_page, page, content, summary, namespace, minor)
@@ -155,23 +153,26 @@ class WikiClient:
             summary: Change summary
             minor: Whether this is a minor change
 
-
         Returns:
             Returns True if the page was successfully set, False otherwise.
-            """
+        """
+        if self._wiki is None:
+            logger.error('Not connected to the wiki. Call connect() first.')
+            return False
         options = {'sum': summary, 'minor': minor}
         wiki_page = f'{namespace}:{page}'
         result = False
         try:
-            result = self._wiki.pages.set(wiki_page, content, **options)
+            with self._lock:
+                result = self._wiki.pages.set(wiki_page, content, **options)
         except DokuWikiError as e:
             logger.error(e)
         return result
 
     async def set_page_async(self, page: str, content: str, summary: str, namespace: str = DEFAULT_NSP,
-                            minor: bool = False) -> bool:
+                             minor: bool = False) -> bool:
         """Async wrapper for set_page."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             partial(self.set_page, page, content, summary, namespace, minor)
@@ -184,8 +185,7 @@ class WikiClient:
         Arguments:
             page: the page of interest
             keep_order: Return an ordered dict if True
-            """
-        # Get the page content
+        """
         data = {}
         try:
             content = self._wiki.pages.get(page)
@@ -198,7 +198,6 @@ class WikiClient:
         """Get the page information of ''page''."""
         return self._wiki.pages.info(page)
 
-
     # Wiki media
     def list_media(self, namespace: str, depth: int = 0, md5_hash: bool = False, skip_acl: bool = False,
                    pattern: str = '*') -> Dict:
@@ -210,7 +209,7 @@ class WikiClient:
             md5_hash: do an md5 sum of content
             skip_acl: skip everything regardless of ACL
             pattern: list only media matching pattern
-            """
+        """
         options = {'depth': depth, 'hash': md5_hash, 'skipacl': skip_acl}
         result = {}
         try:
@@ -227,7 +226,7 @@ class WikiClient:
 
         Returns:
             Returns a list of changes since given ''timestamp''.
-            """
+        """
         return self._wiki.medias.changes(timestamp)
 
     def media_info(self, media: str):
@@ -238,7 +237,7 @@ class WikiClient:
 
         Returns:
             Returns information of ''media''.
-            """
+        """
         return self._wiki.medias.info(media)
 
     def add_media(self, media: str, filepath: Path, overwrite: bool = True):
@@ -248,9 +247,7 @@ class WikiClient:
             media: name of media
             filepath: path to local media file
             overwrite: parameter specify if the media must be replaced if it exists remotely.
-
-            """
-
+        """
         self._wiki.medias.add(media, filepath.resolve(), overwrite)
 
     def media_delete(self, media: str):
@@ -258,6 +255,5 @@ class WikiClient:
 
         Arguments:
             media: name of media
-
-           """
+        """
         return self._wiki.medias.delete(media)
